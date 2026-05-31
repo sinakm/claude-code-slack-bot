@@ -121,6 +121,13 @@ export class WorkingDirectoryManager {
       return channelConfig.directory;
     }
 
+    if (config.defaultWorkingDirectory) {
+      this.logger.debug('Using default working directory from config', {
+        directory: config.defaultWorkingDirectory,
+      });
+      return config.defaultWorkingDirectory;
+    }
+
     this.logger.debug('No working directory configured', { channelId, threadTs });
     return undefined;
   }

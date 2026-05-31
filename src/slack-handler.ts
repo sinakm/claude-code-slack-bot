@@ -8,6 +8,7 @@ import { TodoManager, Todo } from './todo-manager';
 import { McpManager } from './mcp-manager';
 import { permissionServer } from './permission-mcp-server';
 import { config } from './config';
+import { GitWorkspaceManager } from './git-workspace-manager';
 
 interface MessageEvent {
   user: string;
@@ -35,6 +36,7 @@ export class SlackHandler {
   private fileHandler: FileHandler;
   private todoManager: TodoManager;
   private mcpManager: McpManager;
+  private gitWorkspace: GitWorkspaceManager = new GitWorkspaceManager();
   private todoMessages: Map<string, string> = new Map(); // sessionKey -> messageTs
   private originalMessages: Map<string, { channel: string; ts: string }> = new Map(); // sessionKey -> original message info
   private currentReactions: Map<string, string> = new Map(); // sessionKey -> current emoji
@@ -204,9 +206,22 @@ export class SlackHandler {
     this.activeControllers.set(sessionKey, abortController);
 
     let session = this.claudeHandler.getSession(user, channel, thread_ts || ts);
+    let wipSummary = '';
     if (!session) {
       this.logger.debug('Creating new session', { sessionKey });
       session = this.claudeHandler.createSession(user, channel, thread_ts || ts);
+      try {
+        const park = await this.gitWorkspace.parkAndRefresh(workingDirectory);
+        if (park.parked) {
+          await say({
+            text: `:package: Parked uncommitted work from a previous session on \`${park.branch}\`${park.pushed ? ' (pushed to GitHub)' : ' (local only)'} and refreshed to latest master.`,
+            thread_ts: thread_ts || ts,
+          });
+        }
+        wipSummary = await this.gitWorkspace.buildWipSummary(workingDirectory, park);
+      } catch (e) {
+        this.logger.warn('WIP park/summary step failed', { error: String(e) });
+      }
     } else {
       this.logger.debug('Using existing session', { sessionKey, sessionId: session.sessionId });
     }
@@ -216,9 +231,16 @@ export class SlackHandler {
 
     try {
       // Prepare the prompt with file attachments
-      const finalPrompt = processedFiles.length > 0 
+      let finalPrompt = processedFiles.length > 0 
         ? await this.fileHandler.formatFilePrompt(processedFiles, text || '')
         : text || '';
+      if (wipSummary) {
+        finalPrompt = `${wipSummary}
+
+---
+
+${finalPrompt}`;
+      }
 
       this.logger.info('Sending query to Claude Code SDK', { 
         prompt: finalPrompt.substring(0, 200) + (finalPrompt.length > 200 ? '...' : ''), 
